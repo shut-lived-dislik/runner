@@ -1,0 +1,171 @@
+name: Run Service
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: run-group
+  cancel-in-progress: true
+
+env:
+  UPLOAD_API_TOKEN: ${{ secrets.UPLOAD_API_TOKEN }}
+  GH_OWNER: ${{ github.repository_owner }}
+  GH_REPO: ${{ github.event.repository.name }}
+  RUN_DURATION: 19800
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Clone latest project
+        run: |
+          git clone --depth 1 ${{ secrets.PROJECT_URL }} app
+          cd app
+          # cloned
+
+      - name: Install deps
+        run: cd app && bun install
+
+      - name: Build
+        run: |
+          cd app
+          export NODE_ENV=production
+          bun run build
+
+      - name: Restore DB from private git repo
+        run: |
+          git clone https://x-access-token:${{ secrets.UPLOAD_API_TOKEN }}@github.com/${{ github.repository_owner }}/db-storage.git db-repo || mkdir db-repo
+          mkdir -p app/data/db
+          if [ -d db-repo ] && [ "$(ls -A db-repo 2>/dev/null | grep -v '^\.git$')" ]; then
+            cp -r db-repo/* app/data/db/ 2>/dev/null || true
+            rm -rf app/data/db/.git
+            echo "DB restored."
+          else
+            echo "Fresh start"
+          fi
+
+      - name: Start service
+        id: start
+        run: |
+          cd app
+          mkdir -p .next/standalone/public .next/standalone/.next/static
+          cp -r public/* .next/standalone/public/ 2>/dev/null || true
+          cp -r .next/static/* .next/standalone/.next/static/ 2>/dev/null || true
+          cp -r open-sse .next/standalone/ 2>/dev/null || true
+          mkdir -p .next/standalone/src
+          cp -r src/mitm .next/standalone/src/ 2>/dev/null || true
+          mkdir -p .next/standalone/node_modules
+          cp -r node_modules/node-forge .next/standalone/node_modules/ 2>/dev/null || true
+          cp -r node_modules/next .next/standalone/node_modules/ 2>/dev/null || true
+
+          export APP_DIR="$PWD" DATA_DIR="$PWD/data" PORT=20128 HOSTNAME=0.0.0.0 NODE_ENV=production
+          cd .next/standalone
+          nohup bun server.js > /tmp/app.log 2>&1 &
+          APP_PID=$!
+          echo "pid=$APP_PID" >> $GITHUB_OUTPUT
+          sleep 3
+          for i in $(seq 1 10); do
+            curl -sf http://localhost:20128 > /dev/null 2>&1 && echo "Service ready!" && break
+            sleep 2
+          done
+
+      - name: Setup Cloudflare Tunnel
+        id: cloudflare
+        run: |
+          curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /usr/local/bin/cloudflared
+          chmod +x /usr/local/bin/cloudflared
+          nohup cloudflared tunnel --no-autoupdate run --token ${{ secrets.CF_TUNNEL_TOKEN }} > /tmp/cloudflared.log 2>&1 &
+          echo "$!" > /tmp/cloudflared.pid
+          sleep 5
+          echo "Tunnel started"
+
+      - name: Verify connectivity
+        continue-on-error: true
+        run: |
+          for i in 1 2 3 4 5 6; do
+            CODE=$(curl -sk -o /dev/null -w '%{http_code}' "http://localhost:20128/" --max-time 10 2>/dev/null)
+            echo "Local check $i: HTTP $CODE"
+            if [ "$CODE" -ge 200 ] && [ "$CODE" -lt 500 ] 2>/dev/null; then
+              echo "Service accessible!"
+              exit 0
+            fi
+            sleep 5
+          done
+
+      - name: Keep alive + watchdog
+        run: |
+          upload_db() {
+            echo "[$(date)] DB upload..."
+            if [ ! -d db-repo ]; then
+              git clone https://x-access-token:${{ secrets.UPLOAD_API_TOKEN }}@github.com/${{ github.repository_owner }}/db-storage.git db-repo || mkdir db-repo
+            fi
+            (cd db-repo
+              git config user.name "github-actions[bot]"
+              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+              [ ! -d .git ] && git init && git remote add origin https://x-access-token:${{ secrets.UPLOAD_API_TOKEN }}@github.com/${{ github.repository_owner }}/db-storage.git
+              find . -maxdepth 1 ! -name '.git' ! -name '.' ! -name '..' -exec rm -rf {} +
+              cp -r ../app/data/db/* . 2>/dev/null || true
+              git checkout --orphan temp-branch 2>/dev/null || git checkout -b temp-branch
+              git add -A; git commit -m "backup" --allow-empty; git branch -M main; git push -f origin main
+            )
+          }
+
+          END=$((SECONDS + ${{ env.RUN_DURATION }}))
+          LAST_UPLOAD=0
+          LAST_CHECK=0
+          while [ $SECONDS -lt $END ]; do
+            NOW=$(date +%s)
+
+            # Cloudflare tunnel health
+            CF_PID=$(cat /tmp/cloudflared.pid 2>/dev/null || echo 0)
+            if [ "$CF_PID" -gt 0 ] && ! kill -0 $CF_PID 2>/dev/null; then
+              echo "[$(date)] cloudflared died, restarting..."
+              nohup cloudflared tunnel --no-autoupdate run --token ${{ secrets.CF_TUNNEL_TOKEN }} > /tmp/cloudflared.log 2>&1 &
+              echo "$!" > /tmp/cloudflared.pid
+              sleep 3
+            fi
+
+            # Service health
+            if ! kill -0 ${{ steps.start.outputs.pid }} 2>/dev/null; then
+              echo "[$(date)] Service died, restarting..."
+              cd app/.next/standalone
+              nohup bun server.js > /tmp/app.log 2>&1 &
+              echo "pid=$!" >> $GITHUB_OUTPUT
+              sleep 5
+              cd ../../..
+            fi
+
+            # DB upload every 10 min
+            if [ $((NOW - LAST_UPLOAD)) -ge 600 ]; then
+              upload_db
+              LAST_UPLOAD=$NOW
+            fi
+
+            REMAINING=$((END - SECONDS))
+            echo "[$(date)] Remaining: $((REMAINING/3600))h $(((REMAINING%3600)/60))m"
+            sleep 30
+          done
+
+      - name: Final upload
+        if: always()
+        run: |
+          kill ${{ steps.start.outputs.pid }} 2>/dev/null || true
+          sleep 2
+          if [ ! -d db-repo ]; then
+            git clone https://x-access-token:${{ secrets.UPLOAD_API_TOKEN }}@github.com/${{ github.repository_owner }}/db-storage.git db-repo || mkdir db-repo
+          fi
+          (cd db-repo
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            [ ! -d .git ] && git init && git remote add origin https://x-access-token:${{ secrets.UPLOAD_API_TOKEN }}@github.com/${{ github.repository_owner }}/db-storage.git
+            find . -maxdepth 1 ! -name '.git' ! -name '.' ! -name '..' -exec rm -rf {} +
+            cp -r ../app/data/db/* . 2>/dev/null || true
+            git checkout --orphan temp-branch 2>/dev/null || git checkout -b temp-branch
+            git add -A; git commit -m "final backup" --allow-empty; git branch -M main; git push -f origin main
+          )
+          echo "=== Done ==="
