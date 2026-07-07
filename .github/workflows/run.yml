@@ -22,7 +22,7 @@ jobs:
     steps:
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Restore DB from private git repo
         run: |
@@ -39,14 +39,14 @@ jobs:
       - name: Start service
         id: start
         run: |
-          echo "Installing 9router globally..."
-          sudo npm install -g 9router
+          echo "Installing 9router locally..."
+          npm install 9router
 
           export DATA_DIR="$PWD/data" PORT=20128 HOSTNAME=0.0.0.0 NODE_ENV=production
           mkdir -p "$DATA_DIR"
           
           echo "Starting 9router..."
-          nohup 9router --no-browser --skip-update --tray --port 20128 --host 0.0.0.0 > /dev/null 2>&1 &
+          nohup npx 9router --no-browser --skip-update --tray --port 20128 --host 0.0.0.0 > /dev/null 2>&1 &
           APP_PID=$!
           echo "pid=$APP_PID" >> $GITHUB_OUTPUT
           sleep 3
@@ -114,7 +114,7 @@ jobs:
             if ! kill -0 ${{ steps.start.outputs.pid }} 2>/dev/null; then
               echo "[$(date)] Service died, restarting..."
               export DATA_DIR="$PWD/data" PORT=20128 HOSTNAME=0.0.0.0 NODE_ENV=production
-              nohup 9router --no-browser --skip-update --tray --port 20128 --host 0.0.0.0 > /dev/null 2>&1 &
+              nohup npx 9router --no-browser --skip-update --tray --port 20128 --host 0.0.0.0 > /dev/null 2>&1 &
               echo "pid=$!" >> $GITHUB_OUTPUT
               sleep 5
             fi
