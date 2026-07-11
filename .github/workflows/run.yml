@@ -54,7 +54,7 @@ jobs:
           mkdir -p "$DATA_DIR"
           
           echo "Starting 9router..."
-          nohup bun cli.js --no-browser --skip-update --tray --port 20128 --host 0.0.0.0 > /dev/null 2>&1 &
+          nohup bun cli.js --no-browser --skip-update --tray --port 20128 --host 0.0.0.0 > 9router.log 2>&1 &
           APP_PID=$!
           echo "pid=$APP_PID" >> $GITHUB_OUTPUT
           sleep 3
@@ -123,8 +123,11 @@ jobs:
             # Service health
             if ! curl -s http://localhost:20128 > /dev/null 2>&1; then
               echo "[$(date)] Service died or unresponsive, restarting..."
+              echo "=== 9router Log ==="
+              cat 9router.log 2>/dev/null || true
+              echo "==================="
               export DATA_DIR="$PWD/data" PORT=20128 HOSTNAME=0.0.0.0 NODE_ENV=production
-              nohup bun cli.js --no-browser --skip-update --tray --port 20128 --host 0.0.0.0 > /dev/null 2>&1 &
+              nohup bun cli.js --no-browser --skip-update --tray --port 20128 --host 0.0.0.0 > 9router.log 2>&1 &
               sleep 5
             fi
 
