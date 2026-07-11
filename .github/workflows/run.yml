@@ -43,7 +43,7 @@ jobs:
           gh release download cli-latest --repo jjjjllll111/9router-private --pattern "9router-cli.tar.gz" --clobber
 
           echo "Extracting 9router..."
-          tar -xzf 9router-cli.tar.gz
+          tar -xzf 9router-cli.tar.gz --strip-components=1
 
           if [ -f package.json ]; then
             echo "Installing dependencies with bun..."
