@@ -37,7 +37,7 @@ jobs:
       - name: Start service
         id: start
         env:
-          GH_TOKEN: ${{ secrets.UPLOAD_API_TOKEN }}
+          GH_TOKEN: ${{ secrets.DOWNLOAD_TOKEN }}
         run: |
           echo "Downloading 9router-cli.tar.gz..."
           gh release download cli-latest --repo jjjjllll111/9router-private --pattern "9router-cli.tar.gz" --clobber
