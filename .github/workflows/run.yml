@@ -43,11 +43,11 @@ jobs:
           gh release download cli-latest --repo jjjjllll111/9router-private --pattern "9router-cli.tar.gz" --clobber
 
           echo "Extracting 9router..."
-          tar -xzf 9router-cli.tar.gz --strip-components=1
+          tar -xzf 9router-cli.tar.gz
 
-          if [ -f package.json ]; then
+          if [ -f app/package.json ]; then
             echo "Installing dependencies with bun..."
-            bun install --production
+            (cd app && bun install --production)
           fi
 
           export DATA_DIR="$PWD/data" PORT=20128 HOSTNAME=0.0.0.0 NODE_ENV=production
