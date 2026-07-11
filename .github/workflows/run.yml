@@ -93,9 +93,9 @@ jobs:
             mkdir -p db-repo
             zip -r db-repo/data.zip data/ -x "data/logs/*" "data/bin/*"
             (cd db-repo
+              [ ! -d .git ] && git init && git remote add origin https://x-access-token:${{ secrets.UPLOAD_API_TOKEN }}@github.com/${{ github.repository_owner }}/db-storage.git
               git config user.name "github-actions[bot]"
               git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-              [ ! -d .git ] && git init && git remote add origin https://x-access-token:${{ secrets.UPLOAD_API_TOKEN }}@github.com/${{ github.repository_owner }}/db-storage.git
               git checkout --orphan temp-branch 2>/dev/null || git checkout -b temp-branch
               git add data.zip
               git commit -m "backup" --allow-empty
@@ -119,11 +119,10 @@ jobs:
             fi
 
             # Service health
-            if ! kill -0 ${{ steps.start.outputs.pid }} 2>/dev/null; then
-              echo "[$(date)] Service died, restarting..."
+            if ! curl -sf http://localhost:20128 > /dev/null 2>&1; then
+              echo "[$(date)] Service died or unresponsive, restarting..."
               export DATA_DIR="$PWD/data" PORT=20128 HOSTNAME=0.0.0.0 NODE_ENV=production
               nohup bun cli.js --no-browser --skip-update --tray --port 20128 --host 0.0.0.0 > /dev/null 2>&1 &
-              echo "pid=$!" >> $GITHUB_OUTPUT
               sleep 5
             fi
 
@@ -146,9 +145,9 @@ jobs:
           mkdir -p db-repo
           zip -r db-repo/data.zip data/ -x "data/logs/*" "data/bin/*"
           (cd db-repo
+            [ ! -d .git ] && git init && git remote add origin https://x-access-token:${{ secrets.UPLOAD_API_TOKEN }}@github.com/${{ github.repository_owner }}/db-storage.git
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            [ ! -d .git ] && git init && git remote add origin https://x-access-token:${{ secrets.UPLOAD_API_TOKEN }}@github.com/${{ github.repository_owner }}/db-storage.git
             git checkout --orphan temp-branch 2>/dev/null || git checkout -b temp-branch
             git add data.zip
             git commit -m "final backup" --allow-empty
